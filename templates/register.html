@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Register</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .container {
+            margin-top: 50px;
+        }
+        .row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .card {
+            margin: 20px;
+        }
+        #savedFace {
+            max-width: 100%;
+        }
+        #face-detected {
+            display: none;
+            color: green;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        #canvas {
+            display: none;
+        }
+        .video-container {
+            position: relative;
+            display: inline-block;
+        }
+        #face-mask {
+            position: absolute;
+            border: 2px solid green;
+            display: none;
+            z-index: 2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mt-5 text-center">Register</h1>
+        <form method="POST" action="/register" id="register-form">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="name">Name</label>
+                        <input type="text" class="form-control" id="name" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="phone">Phone</label>
+                        <input type="text" class="form-control" id="phone" name="phone" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="hidden" id="img_data" name="img_data">
+                        <div id="face-detected">Face detected! You can now register.</div>
+                    </div>
+                    <button type="submit" class="btn btn-success mt-3" id="register">Register</button>
+                </div>
+                <div class="col-md-6">
+                    <div class="video-container">
+                        <video id="video" width="640" height="480" autoplay></video>
+                        <div id="face-mask"></div>
+                    </div>
+                </div>
+            </div>
+        </form>
+        <button class="btn btn-secondary mt-3" onclick="window.location.href='/'">Back to Dashboard</button>
+    </div>
+    <script>
+        const video = document.getElementById('video');
+        const faceMask = document.getElementById('face-mask');
+        const registerButton = document.getElementById('register');
+        const imgDataInput = document.getElementById('img_data');
+        const faceDetectedText = document.getElementById('face-detected');
+        const registerForm = document.getElementById('register-form');
+        let detectedFace = null;
+
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                video.srcObject = stream;
+                setInterval(detectFace, 1000); // Detect face every second
+            })
+            .catch(err => {
+                console.error('Error accessing webcam: ', err);
+            });
+
+        function detectFace() {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imgData = canvas.toDataURL('image/jpeg');
+
+            fetch('/detect_face', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ img_data: imgData })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.detected) {
+                    detectedFace = imgData;
+                    registerButton.style.display = 'block';
+                    faceDetectedText.style.display = 'block';
+                    const face = data.face_rect;
+                    faceMask.style.display = 'block';
+                    faceMask.style.left = `${face.x}px`;
+                    faceMask.style.top = `${face.y}px`;
+                    faceMask.style.width = `${face.w}px`;
+                    faceMask.style.height = `${face.h}px`;
+                } else {
+                    detectedFace = null;
+                    registerButton.style.display = 'none';
+                    faceDetectedText.style.display = 'none';
+                    faceMask.style.display = 'none';
+                }
+            })
+            .catch(err => {
+                console.error('Error detecting face: ', err);
+            });
+        }
+
+        registerForm.addEventListener('submit', (event) => {
+            if (detectedFace) {
+                imgDataInput.value = detectedFace;
+            } else {
+                alert('No face detected. Please try again.');
+                event.preventDefault();
+            }
+        });
+    </script>
+</body>
+</html>
