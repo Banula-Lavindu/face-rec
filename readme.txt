@@ -12,7 +12,7 @@ pip install tensorflow
 pip install tf-keras
 pip install scipy
 
-pip freeze > requirements.txt
+
 
 then enter
 
