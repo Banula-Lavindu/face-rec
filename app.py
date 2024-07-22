@@ -11,6 +11,7 @@ import time
 import shutil
 from scipy.spatial import distance
 import json
+import logging
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'
@@ -19,8 +20,7 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-image_dir = 'static/images'
-os.makedirs(image_dir, exist_ok=True)
+logging.basicConfig(level=logging.INFO)
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -34,7 +34,6 @@ class Client(db.Model):
     name = db.Column(db.String(150), nullable=False)
     phone = db.Column(db.String(50), nullable=False)
     loyalty_points = db.Column(db.Integer, default=0)
-    image = db.Column(db.String(100), nullable=False, unique=True)
     attendance_count = db.Column(db.Integer, default=0)
     encodings = db.Column(db.Text, nullable=False)
 
@@ -48,9 +47,6 @@ class Attendance(db.Model):
 def delete_client(client_id):
     client = Client.query.get(client_id)
     if client:
-        client_folder = os.path.join(image_dir, client.name)
-        if os.path.exists(client_folder):
-            shutil.rmtree(client_folder)
         db.session.delete(client)
         db.session.commit()
         flash('Client deleted successfully')
@@ -89,16 +85,6 @@ def crop_face(frame):
 @login_required
 def index():
     clients = Client.query.all()
-    for client in clients:
-        img_dir = os.path.join(image_dir, client.name)
-        if os.path.exists(img_dir):
-            client_photos = sorted(os.listdir(img_dir), reverse=True)
-            if client_photos:
-                client.latest_image = f'{client.name}/{client_photos[0]}'
-            else:
-                client.latest_image = 'default.jpg'
-        else:
-            client.latest_image = 'default.jpg'
     return render_template('index.html', clients=clients)
 
 @app.route('/signup', methods=['GET', 'POST'])
@@ -155,17 +141,18 @@ def register():
             flash('No face detected. Please try again.')
             return redirect(url_for('register'))
 
-        img_dir = os.path.join(image_dir, name)
-        os.makedirs(img_dir, exist_ok=True)
-        img_path = os.path.join(img_dir, f'{int(time.time())}.jpg')
-        cv2.imwrite(img_path, face)
+        try:
+            face_encoding = DeepFace.represent(face, model_name='Facenet', enforce_detection=False)[0]['embedding']
+        except Exception as e:
+            flash('Failed to generate face encoding. Please try again.')
+            logging.error(f"DeepFace error: {e}")
+            return redirect(url_for('register'))
 
-        face_encoding = DeepFace.represent(face, model_name='Facenet', enforce_detection=False)[0]['embedding']
         if Client.query.filter_by(name=name).first():
             flash('Client already exists')
             return redirect(url_for('register'))
 
-        new_client = Client(name=name, phone=phone, image=img_path, encodings=json.dumps([face_encoding]))
+        new_client = Client(name=name, phone=phone, encodings=json.dumps([face_encoding]))
         db.session.add(new_client)
         db.session.commit()
         return redirect(url_for('index'))
@@ -193,7 +180,16 @@ def recognize_live():
     if face is None:
         return jsonify({'recognized_name': 'No Face Detected'})
 
-    face_encoding = DeepFace.represent(face, model_name='Facenet', enforce_detection=False)[0]['embedding']
+    try:
+        face_encoding = DeepFace.represent(face, model_name='Facenet', enforce_detection=False)[0]['embedding']
+    except Exception as e:
+        logging.error(f"DeepFace error: {e}")
+        return jsonify({'recognized_name': 'Error Processing Face'})
+
+    if not np.isfinite(face_encoding).all():
+        logging.error(f"Invalid face encoding: {face_encoding}")
+        return jsonify({'recognized_name': 'Invalid Face Encoding'})
+
     recognized_name = "Unknown"
     min_distance = float('inf')
 
@@ -201,6 +197,9 @@ def recognize_live():
     for client in clients:
         client_encodings = json.loads(client.encodings)
         for encoding in client_encodings:
+            if not np.isfinite(encoding).all():
+                logging.error(f"Invalid client encoding for {client.name}: {encoding}")
+                continue
             dist = distance.euclidean(face_encoding, encoding)
             if dist < min_distance:
                 min_distance = dist
@@ -270,9 +269,13 @@ def detect_and_recognize_face():
 
     try:
         face_encoding = DeepFace.represent(face, model_name='Facenet', enforce_detection=False)[0]['embedding']
-    except cv2.error as e:
-        print(f"OpenCV error: {e}")
+    except Exception as e:
+        logging.error(f"DeepFace error: {e}")
         return jsonify({'recognized_name': 'Error Processing Face'})
+
+    if not np.isfinite(face_encoding).all():
+        logging.error(f"Invalid face encoding: {face_encoding}")
+        return jsonify({'recognized_name': 'Invalid Face Encoding'})
 
     recognized_name = "Unknown"
     min_distance = float('inf')
@@ -281,6 +284,9 @@ def detect_and_recognize_face():
     for client in clients:
         client_encodings = json.loads(client.encodings)
         for encoding in client_encodings:
+            if not np.isfinite(encoding).all():
+                logging.error(f"Invalid client encoding for {client.name}: {encoding}")
+                continue
             dist = distance.euclidean(face_encoding, encoding)
             if dist < min_distance:
                 min_distance = dist
